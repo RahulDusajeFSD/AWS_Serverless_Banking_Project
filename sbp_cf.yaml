@@ -138,3 +138,42 @@ Resources:
              
             Timeout: 60
 
+
+    LambdaFunctionWithdrawAmount:
+        Description: This function deals with withdrawing the amount from an account
+        DependsOn: LambdaExecutionRole
+        Type: AWS::Lambda::Function
+        Properties:
+            Runtime: python3.11
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Handler: index.withdraw_amount
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+                    dynamodb = boto3.resource('dynamodb')
+                    table = dynamodb.Table('BankingProject')
+
+                    def withdraw_amount(event, context):
+                        email = event['email']          # Retrieve email from event
+                        balance = event['balance']
+                        response = table.update_item(
+                            Key = {'email': email},
+                            UpdateExpression="SET Balance = Balance - :b",
+                            ExpressionAttributeValues={':b': balance},
+                            ReturnValues="UPDATED_NEW"
+                        )
+                        return {
+                        'statusCode': 200,
+                        'body': {
+                            'email': email,
+                            'message': "Balance updated for " + email
+                        }
+                        }
+                        
+            Timeout: 60
+    
+
+        
+
+
