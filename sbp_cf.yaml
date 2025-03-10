@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: This is a serverless Banking application for two users A & B. The project involves interaction with AWS Cognito, DynamoDB, Lambda, S3, SES.
+
+Resources: 
+    BankingDetails:
+        Type: AWS::DynamoDB::Table
+        Properties:
+            TableName: BankingProject
+            AttributeDefinitions:      # This is just for defining the primary key and sort key and for GSIs, LSIs
+                - AttributeName: "email"
+                  AttributeType: "S"
+            KeySchema:
+                - AttributeName: "email"
+                  KeyType: "HASH"  # Partition Key
+
+        
+            BillingMode: PAY_PER_REQUEST  # On-Demand
+
+    LambdaExecutionRole:  
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                        Service:
+                            - lambda.amazonaws.com  #Since lambda is goind to access DynamoDB
+                      Action:
+                        - 'sts:AssumeRole'  #To Temporarily access dynamoDB
+            Description: IAM Role for Lambda to Access DynamoDB
+            ManagedPolicyArns: 
+            - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess # from IAM Policies of AmazonDynamoDBFullAccess
+
+
+    LambdaFunctionAddAmount:  #To Add Amount to User Balance
+        Description: Lambda with DynamoDB
+        DependsOn: LambdaExecutionRole
+        Type: AWS::Lambda::Function
+        Properties:
+            Runtime: python3.11
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Handler: index.add_amount  # lambda filename + function name
+            Code: 
+                ZipFile: |
+                    import json
+                    import boto3
+                    dynamodb = boto3.resource('dynamodb')
+                    table = dynamodb.Table('BankingProject')
+
+                    def add_amount(event, context):
+                        email = event['email']          # Retrieve email from event
+                        balance = event['balance']
+                        response = table.update_item(
+                            Key = {'email': email},
+                            UpdateExpression="SET Balance = Balance + :b",
+                            ExpressionAttributeValues={':b': balance},
+                            ReturnValues="UPDATED_NEW"
+                        )
+                        return {
+                        'statusCode': 200,
+                        'body': {
+                            'email': email,
+                            'message': "Balance updated for " + email
+                        }
+                        }
+        
+
+                            
+             
+            Timeout: 60
+
+        
+
+
+
+
+    LambdaFunctionTransferAmount:  #To Transfer amount from Account A -> B
+        Description: To transfer amount from Account A -> B
+        DependsOn: LambdaExecutionRole
+        Type: AWS::Lambda::Function
+        Properties:
+            Runtime: python3.11
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Handler: index.transfer_amount  # lambda filename + function name
+            Code: 
+                ZipFile: |
+                        import json
+                        import boto3
+                        dynamodb = boto3.resource('dynamodb')
+                        table = dynamodb.Table('BankingProject')
+
+                        def checkBalance(email):
+                            response = table.get_item(
+                                Key={'email': email}
+                                
+                            )
+
+                            if 'Item' in response:
+                                return response['Item'].get('Balance', 0)
+                            else:
+                                return None  
+
+
+                        def withdraw(email, amount):
+                            table.update_item(
+                                Key= {'email': email},
+                                UpdateExpression="SET Balance = Balance - :a",
+                                ExpressionAttributeValues={':a': amount}
+
+                            )
+
+                        def deposit(email, amount):
+                            table.update_item(
+                                Key= {'email': email},
+                                UpdateExpression="SET Balance = Balance + :a",
+                                ExpressionAttributeValues={':a': amount}
+
+                            )
+
+
+
+                        def transfer_amount(event, context):
+                        
+                            transfer_from = event['transfer_from']
+                            transfer_to = event['transfer_to']
+                            amount = event['amount']
+
+
+                            withdraw(transfer_from, amount)
+                            deposit(transfer_to, amount)
+
+                            return {
+                                'current_BALANCE_transfer_from': checkBalance(transfer_from),
+                                'statusCode': 200,
+                                'message': 'Amount deducted from ' + transfer_from + ' and deposited to ' + transfer_to
+                            }                    
+             
+            Timeout: 60
+
