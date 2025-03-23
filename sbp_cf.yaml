@@ -1,0 +1,417 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: This is a serverless Banking application for two users A & B. The project involves interaction with AWS Cognito, DynamoDB, Lambda, S3, SES.
+
+Resources: 
+    BankingDetails:
+        Type: AWS::DynamoDB::Table
+        Properties:
+            TableName: BankingProject
+            AttributeDefinitions:      # This is just for defining the primary key and sort key and for GSIs, LSIs
+                - AttributeName: "email"
+                  AttributeType: "S"
+            KeySchema:
+                - AttributeName: "email"
+                  KeyType: "HASH"  # Partition Key
+
+        
+            BillingMode: PAY_PER_REQUEST  # On-Demand
+
+    LambdaExecutionRole:  
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                        Service:
+                            - lambda.amazonaws.com  #Since lambda is goind to access DynamoDB
+                      Action:
+                        - 'sts:AssumeRole'  #To Temporarily access dynamoDB
+            Description: IAM Role for Lambda to Access DynamoDB
+            ManagedPolicyArns: 
+            - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess # from IAM Policies of AmazonDynamoDBFullAccess
+
+
+    LambdaFunctionAddAmount:  #To Add Amount to User Balance
+        Description: Lambda with DynamoDB
+        DependsOn: LambdaExecutionRole
+        Type: AWS::Lambda::Function
+        Properties:
+            Runtime: python3.11
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Handler: index.add_amount  # lambda filename + function name
+            Code: 
+                ZipFile: |
+                    import json
+                    import boto3
+                    dynamodb = boto3.resource('dynamodb')
+                    table = dynamodb.Table('BankingProject')
+
+                    def add_amount(event, context):
+                        email = event['email']          # Retrieve email from event
+                        balance = event['balance']
+                        response = table.update_item(
+                            Key = {'email': email},
+                            UpdateExpression="SET Balance = Balance + :b",
+                            ExpressionAttributeValues={':b': balance},
+                            ReturnValues="UPDATED_NEW"
+                        )
+                        return {
+                        'statusCode': 201,
+                        'body': {
+                            'email': email,
+                            'message': "Balance updated for " + email
+                        }
+                        }
+        
+
+                            
+             
+            Timeout: 60
+
+        
+
+
+
+
+    LambdaFunctionTransferAmount:  #To Transfer amount from Account A -> B
+        Description: To transfer amount from Account A -> B
+        DependsOn: LambdaExecutionRole
+        Type: AWS::Lambda::Function
+        Properties:
+            Runtime: python3.11
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Handler: index.transfer_amount  # lambda filename + function name
+            Code: 
+                ZipFile: |
+                        import json
+                        import boto3
+                        dynamodb = boto3.resource('dynamodb')
+                        table = dynamodb.Table('BankingProject')
+
+                        def checkBalance(email):
+                            response = table.get_item(
+                                Key={'email': email}
+                                
+                            )
+
+                            if 'Item' in response:
+                                return response['Item'].get('Balance', 0)
+                            else:
+                                return None  
+
+
+                        def withdraw(email, amount):
+                            table.update_item(
+                                Key= {'email': email},
+                                UpdateExpression="SET Balance = Balance - :a",
+                                ExpressionAttributeValues={':a': amount}
+
+                            )
+
+                        def deposit(email, amount):
+                            table.update_item(
+                                Key= {'email': email},
+                                UpdateExpression="SET Balance = Balance + :a",
+                                ExpressionAttributeValues={':a': amount}
+
+                            )
+
+
+
+                        def transfer_amount(event, context):
+                        
+                            transfer_from = event['transfer_from']
+                            transfer_to = event['transfer_to']
+                            amount = event['amount']
+
+
+                            withdraw(transfer_from, amount)
+                            deposit(transfer_to, amount)
+
+                            return {
+                                'current_BALANCE_transfer_from': checkBalance(transfer_from),
+                                'statusCode': 200,
+                                'message': 'Amount deducted from ' + transfer_from + ' and deposited to ' + transfer_to
+                            }                    
+             
+            Timeout: 60
+
+
+    LambdaFunctionWithdrawAmount:
+        Description: This function deals with withdrawing the amount from an account
+        DependsOn: LambdaExecutionRole
+        Type: AWS::Lambda::Function
+        Properties:
+            Runtime: python3.11
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Handler: index.withdraw_amount
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+                    dynamodb = boto3.resource('dynamodb')
+                    table = dynamodb.Table('BankingProject')
+
+                    def withdraw_amount(event, context):
+                        email = event['email']          # Retrieve email from event
+                        balance = event['balance']
+                        response = table.update_item(
+                            Key = {'email': email},
+                            UpdateExpression="SET Balance = Balance - :b",
+                            ExpressionAttributeValues={':b': balance},
+                            ReturnValues="UPDATED_NEW"
+                        )
+                        return {
+                        'statusCode': 200,
+                        'body': {
+                            'email': email,
+                            'message': "Balance updated for " + email
+                        }
+                        }
+
+            Timeout: 60
+
+
+    LambdaFunctionCheckBalance:
+        Description: This function deals with checking current balance associated with an account
+        DependsOn: LambdaExecutionRole
+        Type: AWS::Lambda::Function
+        Properties:
+            Runtime: python3.11
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Handler: index.check_balance
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+                    dynamodb = boto3.resource('dynamodb')
+                    table = dynamodb.Table('BankingProject')
+
+                    def check_balance(event, context):
+                        email = event['pathParameters']['email']          # Retrieve email from pathParameters event -- through slug /balance/{email} in API Gateway
+                        response = table.get_item(
+                            Key = {'email': email}
+
+                        )
+
+                        if 'Item' in response:
+                            return {
+                                'statusCode': 200,
+                                'Balance': email + " has balance of $" + str(response['Item'].get('Balance', 0))
+                                }
+                        else:
+                            return None
+
+            Timeout: 60
+
+
+
+#API GATEWAY
+
+    BankingProjectRESTAPI:  #Creating REST API
+        Type: AWS::ApiGateway::RestApi
+        Properties:
+            Name: bankingprojectapi  #API Gateway Name
+
+
+#CREATING PARENT RESOURCE    - /account
+    accountsResource:  # Creating Resource
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            ParentId: !GetAtt BankingProjectRESTAPI.RootResourceId  # Since the parent of this resource is / , we are referring to it. I cases where /resource1/resource2, while defining the parent id of resource2, it will be the (!Ref resource1)
+            PathPart: account  # /account
+            RestApiId: !Ref BankingProjectRESTAPI #Id of API gateway
+
+
+
+
+#---------------------------------------------------------------------------#
+#CREATING RESOURCES    - /account/deposit
+
+    depositResource:  # Creating Resource
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            ParentId: !Ref accountsResource  # attach to /account   # Also, if using !GetAtt use <LogicalId>.<Attribute> use !Ref for <LogicalId>
+            PathPart: deposit  # /deposit
+            RestApiId: !Ref BankingProjectRESTAPI #Id of API gateway
+
+    
+    depositMethod:  #Creating Method for the resource
+        Type: 'AWS::ApiGateway::Method'
+        Properties:
+            RestApiId: !Ref BankingProjectRESTAPI
+            ResourceId: !Ref depositResource
+            HttpMethod: POST
+            MethodResponses:
+                - StatusCode: 201
+            AuthorizationType: NONE
+            Integration:
+                Type: AWS
+                IntegrationResponses:
+                    - StatusCode: 201   #Remember, this has to match with the statucode coming from Lambda Fn.
+                      ResponseTemplates: 
+                        "application/json": ""  # Passes the response as-is from lambda fn to API Gateway
+
+                IntegrationHttpMethod: POST #As API Gateway sends the event and context object to Lambda; therefore, POST call.
+                Uri: !Sub 'arn:aws:apigateway:us-east-2:lambda:path/2015-03-31/functions/${LambdaFunctionAddAmount.Arn}/invocations'
+                RequestTemplates:
+                    "application/json": "$input.json('$')"
+
+
+
+    LambdaInvokePermissionForDeposit:  #To enable Lambda function invokation upon API Gateway Request
+        Type: AWS::Lambda::Permission
+        Properties:
+            FunctionName: !Ref LambdaFunctionAddAmount
+            Action: lambda:InvokeFunction #On What function of Principal (API Gateway here) will Lambda function be invoked
+            Principal: 'apigateway.amazonaws.com' #API Gateway
+            SourceAccount: 715841332016
+
+
+#---------------------------------------------------------------------------#
+
+
+#WITHDRAW METHOD -->
+
+    withdrawResource:  # Creating Resource
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            ParentId: !Ref accountsResource  # attach to /account   # Also, if using !GetAtt use <LogicalId>.<Attribute> use !Ref for <LogicalId>
+            PathPart: withdraw  # /withdraw
+            RestApiId: !Ref BankingProjectRESTAPI #Id of API gateway
+
+    
+    withdrawMethod:  #Creating Method for the resource
+        Type: 'AWS::ApiGateway::Method'
+        Properties:
+            RestApiId: !Ref BankingProjectRESTAPI
+            ResourceId: !Ref withdrawResource
+            HttpMethod: POST
+            MethodResponses:
+                - StatusCode: 201
+            AuthorizationType: NONE
+            Integration:
+                Type: AWS
+                IntegrationResponses:
+                    - StatusCode: 201   #Remember, this has to match with the statucode coming from Lambda Fn.
+                      ResponseTemplates: 
+                        "application/json": ""  # Passes the response as-is from lambda fn to API Gateway
+
+                IntegrationHttpMethod: POST #As API Gateway sends the event and context object to Lambda; therefore, POST call.
+                Uri: !Sub 'arn:aws:apigateway:us-east-2:lambda:path/2015-03-31/functions/${LambdaFunctionWithdrawAmount.Arn}/invocations'
+                RequestTemplates:
+                    "application/json": "$input.json('$')"
+
+
+    LambdaInvokePermissionForWithdraw:  #To enable Lambda function invokation upon API Gateway Request
+        Type: AWS::Lambda::Permission
+        Properties:
+            FunctionName: !Ref LambdaFunctionWithdrawAmount
+            Action: lambda:InvokeFunction #On What function of Principal (API Gateway here) will Lambda function be invoked
+            Principal: 'apigateway.amazonaws.com' #API Gateway
+            SourceAccount: 715841332016
+
+
+#---------------------------------------------------------------------------#
+
+    transferResource:  # Creating Resource
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            ParentId: !Ref accountsResource  # attach to /account   # Also, if using !GetAtt use <LogicalId>.<Attribute> use !Ref for <LogicalId>
+            PathPart: tranfser  # /transfer
+            RestApiId: !Ref BankingProjectRESTAPI #Id of API gateway
+
+    
+    transferMethod:  #Creating Method for the resource
+        Type: 'AWS::ApiGateway::Method'
+        Properties:
+            RestApiId: !Ref BankingProjectRESTAPI
+            ResourceId: !Ref transferResource
+            HttpMethod: POST
+            MethodResponses:
+                - StatusCode: 201
+            AuthorizationType: NONE
+            Integration:
+                Type: AWS
+                IntegrationResponses:
+                    - StatusCode: 201   #Remember, this has to match with the statucode coming from Lambda Fn.
+                      ResponseTemplates: 
+                        "application/json": ""  # Passes the response as-is from lambda fn to API Gateway
+
+                IntegrationHttpMethod: POST #As API Gateway sends the event and context object to Lambda; therefore, POST call.
+                Uri: !Sub 'arn:aws:apigateway:us-east-2:lambda:path/2015-03-31/functions/${LambdaFunctionTransferAmount.Arn}/invocations'
+                RequestTemplates:
+                    "application/json": "$input.json('$')"
+
+
+    LambdaInvokePermissionForTransfer:  #To enable Lambda function invokation upon API Gateway Request
+        Type: AWS::Lambda::Permission
+        Properties:
+            FunctionName: !Ref LambdaFunctionTransferAmount
+            Action: lambda:InvokeFunction #On What function of Principal (API Gateway here) will Lambda function be invoked
+            Principal: 'apigateway.amazonaws.com' #API Gateway
+            SourceAccount: 715841332016
+
+#---------------------------------------------------------------------------#
+#CREATING RESOURCES    - /account/balance
+
+    balanceResource:  # Creating Resource
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            ParentId: !Ref accountsResource  # attach to /account   # Also, if using !GetAtt use <LogicalId>.<Attribute> use !Ref for <LogicalId>
+            PathPart: balance # /account
+            RestApiId: !Ref BankingProjectRESTAPI #Id of API gateway
+
+    
+    balanceMethod:  #Creating Method for the resource
+        Type: 'AWS::ApiGateway::Method'
+        Properties:
+            RestApiId: !Ref BankingProjectRESTAPI
+            ResourceId: !Ref balanceResource
+            HttpMethod: GET
+            MethodResponses:
+                - StatusCode: 200
+            AuthorizationType: NONE
+            Integration:
+                Type: AWS_PROXY
+                IntegrationResponses:
+                    - StatusCode: 200   #Remember, this has to match with the statucode coming from Lambda Fn.
+                      ResponseTemplates: 
+                        "application/json": ""  # Passes the response as-is from lambda fn to API Gateway
+
+                IntegrationHttpMethod: POST #As API Gateway sends the event and context object to Lambda; therefore, POST call.
+                Uri: !Sub 'arn:aws:apigateway:us-east-2:lambda:path/2015-03-31/functions/${LambdaFunctionCheckBalance.Arn}/invocations'
+                RequestTemplates:
+                    application/json: |
+                        {
+                            "email": "$input.params('email')" 
+                        }
+            RequestParameters:
+                "method.request.path.email": true  # Declaring the email as path parameter
+
+    LambdaInvokePermissionForBalanceCheck:  #To enable Lambda function invokation upon API Gateway Request
+        Type: AWS::Lambda::Permission
+        Properties:
+            FunctionName: !Ref LambdaFunctionCheckBalance
+            Action: lambda:InvokeFunction #On What function of Principal (API Gateway here) will Lambda function be invoked
+            Principal: 'apigateway.amazonaws.com' #API Gateway
+            SourceAccount: 715841332016
+
+
+#---------------------------------------------------------------------------#
+
+
+#Deployment to DEV Env
+    APIDeployment: # This is required to make the REST API Publicly accessible.
+        DependsOn: 
+            - depositMethod
+            - balanceMethod         # on Method, Deployment shoud not happen until the mthod is deployed.
+            - transferMethod
+            - withdrawMethod
+        Type: 'AWS::ApiGateway::Deployment'
+        Properties:
+            RestApiId: !Ref BankingProjectRESTAPI
+            Description: Dev Deployment 
+            StageName: Dev
