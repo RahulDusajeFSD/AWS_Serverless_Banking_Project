@@ -8,13 +8,60 @@ Resources:
             TableName: BankingProject
             AttributeDefinitions:      # This is just for defining the primary key and sort key and for GSIs, LSIs
                 - AttributeName: "email"
-                  AttributeType: "S"
+                  AttributeType: "S"   #String
             KeySchema:
                 - AttributeName: "email"
                   KeyType: "HASH"  # Partition Key
 
         
             BillingMode: PAY_PER_REQUEST  # On-Demand
+
+
+#Cognito User Pool - serves as a directory to save user email
+
+    BankingUserPool:
+        Type: AWS::Cognito::UserPool
+        Properties:
+            UserPoolName: BankingUserPool
+            UsernameAttributes:
+              - email
+            AutoVerifiedAttributes:  #Automatically verify email with a code
+              - email 
+            Schema:
+              - Name: email
+                AttributeDataType: String
+                Mutable: false
+                Required: true
+            Policies:
+                PasswordPolicy:
+                    MinimumLength: 8
+                    RequireNumbers: true
+                    RequireSymbols: false
+                    RequireUppercase: true
+            LambdaConfig:
+                PostConfirmation: !GetAtt PostConfirmationLambda.Arn  # Moved here from CognitoTrigger
+
+
+ # Cognito User Pool Client - to interact with user pool
+
+    BankingUserPoolClient:
+        Type: AWS::Cognito::UserPoolClient
+        Properties:
+            ClientName: BankingAppClient
+            UserPoolId: !Ref BankingUserPool
+            GenerateSecret: false  # No secret for client-side apps
+            ExplicitAuthFlows:
+            - ALLOW_USER_PASSWORD_AUTH
+            - ALLOW_REFRESH_TOKEN_AUTH
+
+#Grants permissions to PostLambdaConfirmation fn.
+    PostConfirmationLambdaPermission:
+        Type: AWS::Lambda::Permission
+        Properties:
+            FunctionName: !Ref PostConfirmationLambda
+            Action: lambda:InvokeFunction
+            Principal: cognito-idp.amazonaws.com
+            SourceArn: !GetAtt BankingUserPool.Arn
 
     LambdaExecutionRole:  
         Type: AWS::IAM::Role
@@ -33,6 +80,36 @@ Resources:
             - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess # from IAM Policies of AmazonDynamoDBFullAccess
 
 
+
+#Lambda Function to add a new user post authentication
+
+    PostConfirmationLambda:
+        Type: AWS::Lambda::Function
+        DependsOn: LambdaExecutionRole
+        Properties:
+            Runtime: python3.11
+            Role: !GetAtt LambdaExecutionRole.Arn
+            Handler: index.post_confirmation
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+                    dynamodb = boto3.resource('dynamodb')
+                    table = dynamodb.Table('BankingProject')
+
+                    def post_confirmation(event, context):
+                        email = event['request']['userAttributes']['email']
+                        table.put_item(
+                            Item={
+                                'email': email,
+                                'balance': 0  # Initial balance once the user sign-up successfully. 
+                            }
+                        )
+                        return event
+            Timeout: 60
+
+
+
     LambdaFunctionAddAmount:  #To Add Amount to User Balance
         Description: Lambda with DynamoDB
         DependsOn: LambdaExecutionRole
@@ -48,20 +125,31 @@ Resources:
                     dynamodb = boto3.resource('dynamodb')
                     table = dynamodb.Table('BankingProject')
 
+                    def check_balance(email):                   #To check current user balance
+                        response = table.get_item(
+                            Key = {'email': email}
+                        )
+
+                        if 'Item' in response:
+                            return response['Item'].get('balance',0)
+                        else:
+                            return None
+
                     def add_amount(event, context):
                         email = event['email']          # Retrieve email from event
-                        balance = event['balance']
+                        amount = event['amount']      #changed balance to amount
                         response = table.update_item(
                             Key = {'email': email},
-                            UpdateExpression="SET Balance = Balance + :b",
-                            ExpressionAttributeValues={':b': balance},
+                            UpdateExpression="SET balance = balance + :amount",  #changed balance to amount
+                            ExpressionAttributeValues={':amount': amount},      #changed balance to amount
                             ReturnValues="UPDATED_NEW"
                         )
                         return {
                         'statusCode': 201,
                         'body': {
                             'email': email,
-                            'message': "Balance updated for " + email
+                            'message': "Successfully deposited " + str(amount) + " to " + email,
+                            'current_balance': str(check_balance(email))
                         }
                         }
         
@@ -97,7 +185,7 @@ Resources:
                             )
 
                             if 'Item' in response:
-                                return response['Item'].get('Balance', 0)
+                                return response['Item'].get('balance', 0)
                             else:
                                 return None  
 
@@ -105,16 +193,16 @@ Resources:
                         def withdraw(email, amount):
                             table.update_item(
                                 Key= {'email': email},
-                                UpdateExpression="SET Balance = Balance - :a",
-                                ExpressionAttributeValues={':a': amount}
+                                UpdateExpression="SET balance = balance - :amount",
+                                ExpressionAttributeValues={':amount': amount}
 
                             )
 
                         def deposit(email, amount):
                             table.update_item(
                                 Key= {'email': email},
-                                UpdateExpression="SET Balance = Balance + :a",
-                                ExpressionAttributeValues={':a': amount}
+                                UpdateExpression="SET balance = balance + :amount",
+                                ExpressionAttributeValues={':amount': amount}
 
                             )
 
@@ -131,7 +219,7 @@ Resources:
                             deposit(transfer_to, amount)
 
                             return {
-                                'current_BALANCE_transfer_from': checkBalance(transfer_from),
+                                'sender_current_balance': checkBalance(transfer_from),
                                 'statusCode': 200,
                                 'message': 'Amount deducted from ' + transfer_from + ' and deposited to ' + transfer_to
                             }                    
@@ -156,18 +244,18 @@ Resources:
 
                     def withdraw_amount(event, context):
                         email = event['email']          # Retrieve email from event
-                        balance = event['balance']
+                        amount = event['amount']       #changed balance to amount
                         response = table.update_item(
                             Key = {'email': email},
-                            UpdateExpression="SET Balance = Balance - :b",
-                            ExpressionAttributeValues={':b': balance},
+                            UpdateExpression="SET balance = balance - :amount",
+                            ExpressionAttributeValues={':amount': amount},
                             ReturnValues="UPDATED_NEW"
                         )
                         return {
                         'statusCode': 200,
                         'body': {
                             'email': email,
-                            'message': "Balance updated for " + email
+                            'message': "balance updated for " + email
                         }
                         }
 
@@ -199,7 +287,7 @@ Resources:
                         if 'Item' in response:
                             return {
                                 'statusCode': 200,
-                                'Balance': email + " has balance of $" + str(response['Item'].get('Balance', 0))
+                                'Balance': email + " has balance of $" + str(response['Item'].get('balance', 0))
                                 }
                         else:
                             return None
@@ -415,3 +503,12 @@ Resources:
             RestApiId: !Ref BankingProjectRESTAPI
             Description: Dev Deployment 
             StageName: Dev
+
+
+Outputs:     #To Interact with API Testing Tool
+  UserPoolId:
+    Value: !Ref BankingUserPool      #Gets user pool id from AWS Cognito User Pool Required for signup and confirm signup API Call.
+  ClientId:
+    Value: !Ref BankingUserPoolClient         
+  APIEndpoint:
+    Value: !Sub https://${BankingProjectRESTAPI}.execute-api.${AWS::Region}.amazonaws.com/Dev
