@@ -441,7 +441,7 @@ Resources:
         Type: AWS::ApiGateway::Resource
         Properties:
             ParentId: !Ref accountsResource  # attach to /account   # Also, if using !GetAtt use <LogicalId>.<Attribute> use !Ref for <LogicalId>
-            PathPart: tranfser  # /transfer
+            PathPart: transfer  # /transfer
             RestApiId: !Ref BankingProjectRESTAPI #Id of API gateway
 
     
@@ -479,12 +479,19 @@ Resources:
 
 #CHECK BALANCE METHOD API GATEWAY DECLARATION-->
 
-    balanceResource:  # Creating Resource
+    balanceParentResource:  # Creating Resource
         Type: AWS::ApiGateway::Resource
         Properties:
             ParentId: !Ref accountsResource  # attach to /account   # Also, if using !GetAtt use <LogicalId>.<Attribute> use !Ref for <LogicalId>
             PathPart: balance # /account
             RestApiId: !Ref BankingProjectRESTAPI #Id of API gateway
+
+    balanceResource:
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            ParentId: !Ref balanceParentResource
+            PathPart: "{email}"
+            RestApiId: !Ref BankingProjectRESTAPI
 
     
     balanceMethod:  #Creating Method for the resource
@@ -497,22 +504,24 @@ Resources:
                 - StatusCode: 200
             AuthorizationType: NONE
             Integration:
-                Type: AWS_PROXY
-                IntegrationResponses:
-                    - StatusCode: 200   #Remember, this has to match with the statucode coming from Lambda Fn.
-                      ResponseTemplates: 
-                        "application/json": ""  # Passes the response as-is from lambda fn to API Gateway
-
+                Type: AWS
                 IntegrationHttpMethod: POST #As API Gateway sends the event and context object to Lambda; therefore, POST call.
-                Uri: !Sub 'arn:aws:apigateway:us-east-2:lambda:path/2015-03-31/functions/${LambdaFunctionCheckBalance.Arn}/invocations'
                 RequestTemplates:
                     application/json: |
                         {
-                            "email": "$input.params('email')" 
+                            "pathParameters": {
+                            "email": "$input.params('email')"
+                            }
                         }
-            RequestParameters:
-                "method.request.path.email": true  # Declaring the email as path parameter
+                IntegrationResponses:
+                    - StatusCode: 200   #Remember, this has to match with the statucode coming from Lambda Fn.
+                      ResponseTemplates:
+                        application/json: |    #IMP. the #set is a VTL language for API GAteway to extract the value of BAlance from LAmbda fn output and map it to balance and returning it
+                            #set($balance = $input.path('$.Balance'))  
+                            {"message": "$balance"}
 
+                Uri: !Sub 'arn:aws:apigateway:us-east-2:lambda:path/2015-03-31/functions/${LambdaFunctionCheckBalance.Arn}/invocations'
+    
     LambdaInvokePermissionForBalanceCheck:  #To enable Lambda function invokation upon API Gateway Request
         Type: AWS::Lambda::Permission
         Properties:
@@ -540,9 +549,27 @@ Resources:
 
 
 Outputs:     #To Interact with API Testing Tool
-  UserPoolId:
-    Value: !Ref BankingUserPool      #Gets user pool id from AWS Cognito User Pool Required for signup and confirm signup API Call.
+ #UserPoolId:
+   # Value: !Ref BankingUserPool      #Gets user pool id from AWS Cognito User Pool Required for signup and confirm signup API Call.
+
   ClientId:
-    Value: !Ref BankingUserPoolClient         
-  APIEndpoint:
-    Value: !Sub https://${BankingProjectRESTAPI}.execute-api.${AWS::Region}.amazonaws.com/Dev
+    Value: !Ref BankingUserPoolClient
+
+  #APIEndpoint:
+    #Value: !Sub https://${BankingProjectRESTAPI}.execute-api.${AWS::Region}.amazonaws.com/Dev
+
+  CheckBalanceAPIEndpoint:
+    Value: !Sub https://${BankingProjectRESTAPI}.execute-api.${AWS::Region}.amazonaws.com/dev/account/balance
+
+  TransferFundsAPIEndpoint:
+    Value: !Sub https://${BankingProjectRESTAPI}.execute-api.${AWS::Region}.amazonaws.com/dev/account/transfer
+ 
+  DepositFundsAPIEndpoint:
+    Value: !Sub https://${BankingProjectRESTAPI}.execute-api.${AWS::Region}.amazonaws.com/dev/account/deposit
+
+  WithdrawFundsAPIEndpoint:
+    Value: !Sub https://${BankingProjectRESTAPI}.execute-api.${AWS::Region}.amazonaws.com/dev/account/withdraw
+
+  CognitoUserSignupAPIEndpoint:
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com
+    Description: "Use Same URL for Confirming user -- This creates a record in DynamoDB of newly signed up user."
