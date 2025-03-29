@@ -152,9 +152,11 @@ Resources:
                             'current_balance': str(check_balance(email))
                         }
                         }
-        
+
 
                             
+
+                
              
             Timeout: 60
 
@@ -207,22 +209,30 @@ Resources:
                             )
 
 
-
                         def transfer_amount(event, context):
-                        
+
                             transfer_from = event['transfer_from']
                             transfer_to = event['transfer_to']
                             amount = event['amount']
 
+                            if(checkBalance(transfer_from) > amount):
+                                withdraw(transfer_from, amount)
+                                deposit(transfer_to, amount)
 
-                            withdraw(transfer_from, amount)
-                            deposit(transfer_to, amount)
+                                return {
+                                    'sender_current_balance': checkBalance(transfer_from),
+                                    'statusCode': 201,
+                                    'message': 'Amount deducted from ' + transfer_from + ' and deposited to ' + transfer_to
+                                }
+                            else:
+                                return {
+                                    'statusCode': 201,
+                                    'message': "Insufficient balance of the sender",
+                                    'sender_current_balance': checkBalance(transfer_from),
+                                    
+                                }
 
-                            return {
-                                'sender_current_balance': checkBalance(transfer_from),
-                                'statusCode': 200,
-                                'message': 'Amount deducted from ' + transfer_from + ' and deposited to ' + transfer_to
-                            }                    
+
              
             Timeout: 60
 
@@ -242,22 +252,45 @@ Resources:
                     dynamodb = boto3.resource('dynamodb')
                     table = dynamodb.Table('BankingProject')
 
+                    def check_balance(email):                   #To check current user balance
+                        response = table.get_item(
+                            Key = {'email': email}
+                        )
+
+                        if 'Item' in response:
+                            return response['Item'].get('balance',0)
+                        else:
+                            return None
+
                     def withdraw_amount(event, context):
                         email = event['email']          # Retrieve email from event
                         amount = event['amount']       #changed balance to amount
-                        response = table.update_item(
-                            Key = {'email': email},
-                            UpdateExpression="SET balance = balance - :amount",
-                            ExpressionAttributeValues={':amount': amount},
-                            ReturnValues="UPDATED_NEW"
-                        )
-                        return {
-                        'statusCode': 200,
-                        'body': {
-                            'email': email,
-                            'message': "balance updated for " + email
-                        }
-                        }
+
+                        if(check_balance(email) > amount):
+
+                            response = table.update_item(
+                                Key = {'email': email},
+                                UpdateExpression="SET balance = balance - :amount",
+                                ExpressionAttributeValues={':amount': amount},
+                                ReturnValues="UPDATED_NEW"
+                            )
+                            return {
+                            'statusCode': 201,
+                                'body': {
+                                'email': email,
+                                'message': "Successfully withdrew " + str(amount) + " from " + email,
+                                'current_balance': str(check_balance(email))
+                            }
+                            }
+                        else:
+                            return {
+                            'statusCode': 201,
+                                'body': {
+                                'email': email,
+                                'message': "Current balance less than amount requested to be withdrawn",
+                                'current_balance': str(check_balance(email))
+                            }
+                            }
 
             Timeout: 60
 
@@ -313,10 +346,7 @@ Resources:
             RestApiId: !Ref BankingProjectRESTAPI #Id of API gateway
 
 
-
-
-#---------------------------------------------------------------------------#
-#CREATING RESOURCES    - /account/deposit
+#CREATING SUB RESOURCES    - /account/deposit
 
     depositResource:  # Creating Resource
         Type: AWS::ApiGateway::Resource
@@ -361,7 +391,7 @@ Resources:
 #---------------------------------------------------------------------------#
 
 
-#WITHDRAW METHOD -->
+#WITHDRAW METHOD API GATEWAY DECLARATION-->
 
     withdrawResource:  # Creating Resource
         Type: AWS::ApiGateway::Resource
@@ -404,6 +434,9 @@ Resources:
 
 #---------------------------------------------------------------------------#
 
+
+#TRANSFER METHOD API GATEWAY DECLARATION-->
+
     transferResource:  # Creating Resource
         Type: AWS::ApiGateway::Resource
         Properties:
@@ -443,7 +476,8 @@ Resources:
             SourceAccount: 715841332016
 
 #---------------------------------------------------------------------------#
-#CREATING RESOURCES    - /account/balance
+
+#CHECK BALANCE METHOD API GATEWAY DECLARATION-->
 
     balanceResource:  # Creating Resource
         Type: AWS::ApiGateway::Resource
@@ -502,7 +536,7 @@ Resources:
         Properties:
             RestApiId: !Ref BankingProjectRESTAPI
             Description: Dev Deployment 
-            StageName: Dev
+            StageName: dev
 
 
 Outputs:     #To Interact with API Testing Tool
