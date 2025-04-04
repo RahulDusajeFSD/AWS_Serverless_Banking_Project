@@ -1,3 +1,3 @@
-Serverless Banking App - AWS
+# Serverless Banking App
 
-[![Deploy to AWS](https://d0.awsstatic.com/product-marketing/CloudFormation/cloudformation-deploy-button.png)](https://console.aws.amazon.com/cloudformation/home#/stacks/create/review?templateURL=https://your-s3-bucket.s3.amazonaws.com/banking-template.yaml&stackName=BankingApp)
+A simple serverless banking application built with AWS services. Using a fully serverless architecture, this project demonstrates user authentication, fund management, and balance tracking.
