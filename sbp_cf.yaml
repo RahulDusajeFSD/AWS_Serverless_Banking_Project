@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: This is a serverless Banking application for two users A & B. The project involves interaction with AWS Cognito, DynamoDB, Lambda, S3, SES.
+Description: This is a serverless Banking application for two users A & B. The project involves interaction with AWS Cognito, DynamoDB, Lambda, SES.
 
 Resources: 
     BankingDetails:
